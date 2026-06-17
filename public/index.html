@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Program Tickets</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="page-shell">
+    <header class="site-header">
+      <div>
+        <p class="eyebrow">Ticket Registration</p>
+        <h1 id="programName">Program Tickets</h1>
+      </div>
+      <a class="text-link" href="#account">Check my ticket</a>
+    </header>
+
+    <section class="hero-panel">
+      <div class="hero-copy">
+        <p class="date-line" id="programDate">Program date</p>
+        <h2>Reserve your seat and receive your e-ticket after payment confirmation.</h2>
+        <p class="muted" id="programVenue">Venue</p>
+        <div class="actions">
+          <button class="primary-btn" id="openPaymentBtn">Purchase Ticket</button>
+        </div>
+      </div>
+      <aside class="ticket-card">
+        <p class="label">Ticket</p>
+        <h3 id="ticketType">General Admission</h3>
+        <p class="price"><span id="currency">GHS</span> <span id="ticketPrice">0</span></p>
+        <p class="muted small">Your ticket code is issued only after admin approval.</p>
+      </aside>
+    </section>
+
+    <section id="account" class="account-panel">
+      <div>
+        <p class="eyebrow">Your Account</p>
+        <h2>View request status</h2>
+        <p class="muted">Sign in with the email and password used during ticket registration.</p>
+      </div>
+
+      <form id="loginForm" class="inline-form">
+        <input type="email" name="email" placeholder="Email address" required>
+        <input type="password" name="password" placeholder="Password" required>
+        <button type="submit">Sign In</button>
+      </form>
+
+      <div id="accountOutput" class="status-list"></div>
+    </section>
+  </main>
+
+  <div class="modal" id="paymentModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="paymentTitle">
+      <button class="close-btn" data-close="paymentModal" aria-label="Close">×</button>
+      <p class="eyebrow">Manual Payment</p>
+      <h2 id="paymentTitle">Make payment first</h2>
+      <p class="muted" id="paymentInstruction">Use your full name as reference.</p>
+      <div class="payment-grid">
+        <div class="detail-box">
+          <span>Mobile Money</span>
+          <strong id="momoNumber">000 000 0000</strong>
+          <p id="momoName">Account Name</p>
+        </div>
+        <div class="detail-box">
+          <span>Bank Transfer</span>
+          <strong id="bankAccount">0000000000</strong>
+          <p><span id="bankName">Bank</span> — <span id="bankAccountName">Account Name</span></p>
+        </div>
+      </div>
+      <button class="primary-btn full" id="continueDetailsBtn">I Have Paid</button>
+    </div>
+  </div>
+
+  <div class="modal" id="detailsModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="detailsTitle">
+      <button class="close-btn" data-close="detailsModal" aria-label="Close">×</button>
+      <p class="eyebrow">Ticket Details</p>
+      <h2 id="detailsTitle">Submit your information</h2>
+      <form id="ticketForm" class="stacked-form">
+        <label>Full name<input type="text" name="fullName" required></label>
+        <label>Email<input type="email" name="email" required></label>
+        <label>Phone number<input type="tel" name="phone" required></label>
+        <label>Create password<input type="password" name="password" minlength="6" required></label>
+        <label>Quantity<input type="number" name="quantity" min="1" max="10" value="1" required></label>
+        <label>Payment method
+          <select name="paymentMethod" required>
+            <option value="Mobile Money">Mobile Money</option>
+            <option value="Bank Transfer">Bank Transfer</option>
+          </select>
+        </label>
+        <label>Payment reference or transaction ID<input type="text" name="paymentReference" required></label>
+        <button class="primary-btn full" type="submit">Submit for Approval</button>
+      </form>
+      <p id="formMessage" class="form-message"></p>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

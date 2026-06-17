@@ -12,11 +12,19 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production';
 const ADMIN_SECRET_PATH = process.env.ADMIN_SECRET_PATH || 'admin-access-2026';
+const DATABASE_URL = process.env.DATABASE_URL;
+const isProduction = process.env.NODE_ENV === 'production';
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
+let dbReady = false;
+let lastDbError = null;
+
+const pool = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl: isProduction ? { rejectUnauthorized: false } : false,
+      connectionTimeoutMillis: 8000,
+    })
+  : null;
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -24,6 +32,28 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+}
+
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+function getDbMessage() {
+  if (!DATABASE_URL) {
+    return 'Database is not configured. Add DATABASE_URL to your .env file or Render environment variables.';
+  }
+
+  return 'Database is not connected. If you are running locally, install/start PostgreSQL or replace DATABASE_URL with your Render PostgreSQL External Database URL. If deployed on Render, use the Internal Database URL.';
+}
+
+function requireDatabase(req, res, next) {
+  if (!pool || !dbReady) {
+    return res.status(503).json({
+      message: getDbMessage(),
+      details: lastDbError ? lastDbError.message : undefined,
+    });
+  }
+  next();
 }
 
 function requireUser(req, res, next) {
@@ -63,40 +93,62 @@ function generateTicketCode() {
 }
 
 async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      full_name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      phone TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
+  if (!pool) {
+    lastDbError = new Error('DATABASE_URL is missing.');
+    return false;
+  }
 
-    CREATE TABLE IF NOT EXISTS ticket_requests (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      program_name TEXT NOT NULL,
-      ticket_type TEXT NOT NULL,
-      quantity INTEGER NOT NULL CHECK (quantity > 0),
-      amount NUMERIC(12,2) NOT NULL,
-      payment_method TEXT NOT NULL,
-      payment_reference TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
-      ticket_code TEXT UNIQUE,
-      admin_note TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      approved_at TIMESTAMPTZ
-    );
-  `);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        full_name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        phone TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS ticket_requests (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        program_name TEXT NOT NULL,
+        ticket_type TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK (quantity > 0),
+        amount NUMERIC(12,2) NOT NULL,
+        payment_method TEXT NOT NULL,
+        payment_reference TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        ticket_code TEXT UNIQUE,
+        admin_note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        approved_at TIMESTAMPTZ
+      );
+    `);
+
+    dbReady = true;
+    lastDbError = null;
+    console.log('Database connected and ready.');
+    return true;
+  } catch (err) {
+    dbReady = false;
+    lastDbError = err;
+    console.error('\nDatabase connection failed.');
+    console.error(getDbMessage());
+    console.error(`Reason: ${err.message}\n`);
+    return false;
+  }
 }
 
-if (process.env.INIT_DB === 'true') {
-  initDb().catch((err) => {
-    console.error('Database initialisation failed:', err);
-    process.exit(1);
+initDb();
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    database: dbReady ? 'connected' : 'not connected',
+    message: dbReady ? 'Ready' : getDbMessage(),
   });
-}
+});
 
 app.get('/api/config', (req, res) => {
   res.json({
@@ -116,7 +168,7 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-app.post('/api/register-ticket', async (req, res) => {
+app.post('/api/register-ticket', requireDatabase, asyncRoute(async (req, res) => {
   const {
     fullName,
     email,
@@ -149,19 +201,17 @@ app.post('/api/register-ticket', async (req, res) => {
 
     const existing = await client.query('SELECT id, password_hash FROM users WHERE email = $1', [normalizedEmail]);
     let userId;
-    let passwordHash;
 
     if (existing.rowCount) {
       userId = existing.rows[0].id;
-      passwordHash = existing.rows[0].password_hash;
-      const passwordOk = await bcrypt.compare(password, passwordHash);
+      const passwordOk = await bcrypt.compare(password, existing.rows[0].password_hash);
       if (!passwordOk) {
         await client.query('ROLLBACK');
         return res.status(409).json({ message: 'An account with this email already exists. Use the correct password or sign in.' });
       }
       await client.query('UPDATE users SET full_name = $1, phone = $2 WHERE id = $3', [fullName.trim(), phone.trim(), userId]);
     } else {
-      passwordHash = await bcrypt.hash(password, 12);
+      const passwordHash = await bcrypt.hash(password, 12);
       const created = await client.query(
         'INSERT INTO users (full_name, email, phone, password_hash) VALUES ($1, $2, $3, $4) RETURNING id',
         [fullName.trim(), normalizedEmail, phone.trim(), passwordHash]
@@ -193,14 +243,13 @@ app.post('/api/register-ticket', async (req, res) => {
     });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(err);
-    res.status(500).json({ message: 'Could not submit ticket request.' });
+    throw err;
   } finally {
     client.release();
   }
-});
+}));
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', requireDatabase, asyncRoute(async (req, res) => {
   const email = cleanEmail(req.body.email);
   const password = String(req.body.password || '');
   if (!email || !password) return res.status(400).json({ message: 'Email and password are required.' });
@@ -212,9 +261,9 @@ app.post('/api/login', async (req, res) => {
   if (!valid) return res.status(401).json({ message: 'Invalid email or password.' });
 
   res.json({ token: signToken({ id: result.rows[0].id, role: 'user', email }) });
-});
+}));
 
-app.get('/api/my-account', requireUser, async (req, res) => {
+app.get('/api/my-account', requireDatabase, requireUser, asyncRoute(async (req, res) => {
   const user = await pool.query('SELECT full_name, email, phone, created_at FROM users WHERE id = $1', [req.user.id]);
   const tickets = await pool.query(
     `SELECT id, program_name, ticket_type, quantity, amount, payment_method, payment_reference,
@@ -225,9 +274,9 @@ app.get('/api/my-account', requireUser, async (req, res) => {
     [req.user.id]
   );
   res.json({ user: user.rows[0], tickets: tickets.rows });
-});
+}));
 
-app.post('/api/admin/login', async (req, res) => {
+app.post('/api/admin/login', asyncRoute(async (req, res) => {
   const password = String(req.body.password || '');
   const configuredHash = process.env.ADMIN_PASSWORD_HASH;
   const configuredPassword = process.env.ADMIN_PASSWORD;
@@ -238,9 +287,9 @@ app.post('/api/admin/login', async (req, res) => {
 
   if (!valid) return res.status(401).json({ message: 'Invalid admin password.' });
   res.json({ token: signToken({ role: 'admin' }) });
-});
+}));
 
-app.get('/api/admin/requests', requireAdmin, async (req, res) => {
+app.get('/api/admin/requests', requireDatabase, requireAdmin, asyncRoute(async (req, res) => {
   const status = req.query.status || 'pending';
   const allowed = ['pending', 'approved', 'rejected', 'all'];
   if (!allowed.includes(status)) return res.status(400).json({ message: 'Invalid status filter.' });
@@ -258,9 +307,9 @@ app.get('/api/admin/requests', requireAdmin, async (req, res) => {
     params
   );
   res.json({ requests: result.rows });
-});
+}));
 
-app.post('/api/admin/requests/:id/approve', requireAdmin, async (req, res) => {
+app.post('/api/admin/requests/:id/approve', requireDatabase, requireAdmin, asyncRoute(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ message: 'Invalid request ID.' });
 
@@ -277,16 +326,13 @@ app.post('/api/admin/requests/:id/approve', requireAdmin, async (req, res) => {
       if (!result.rowCount) return res.status(404).json({ message: 'Request not found.' });
       return res.json({ message: 'Ticket approved.', request: result.rows[0] });
     } catch (err) {
-      if (err.code !== '23505') {
-        console.error(err);
-        return res.status(500).json({ message: 'Could not approve request.' });
-      }
+      if (err.code !== '23505') throw err;
     }
   }
   res.status(500).json({ message: 'Could not generate a unique ticket code.' });
-});
+}));
 
-app.post('/api/admin/requests/:id/reject', requireAdmin, async (req, res) => {
+app.post('/api/admin/requests/:id/reject', requireDatabase, requireAdmin, asyncRoute(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ message: 'Invalid request ID.' });
 
@@ -299,9 +345,9 @@ app.post('/api/admin/requests/:id/reject', requireAdmin, async (req, res) => {
   );
   if (!result.rowCount) return res.status(404).json({ message: 'Request not found.' });
   res.json({ message: 'Request rejected.', request: result.rows[0] });
-});
+}));
 
-app.get('/api/admin/verify/:code', requireAdmin, async (req, res) => {
+app.get('/api/admin/verify/:code', requireDatabase, requireAdmin, asyncRoute(async (req, res) => {
   const code = String(req.params.code || '').trim().toUpperCase();
   const result = await pool.query(
     `SELECT tr.ticket_code, tr.status, tr.program_name, tr.ticket_type, tr.quantity, tr.amount, tr.approved_at,
@@ -315,13 +361,18 @@ app.get('/api/admin/verify/:code', requireAdmin, async (req, res) => {
   if (!result.rowCount) return res.status(404).json({ valid: false, message: 'Ticket code not found.' });
   const row = result.rows[0];
   res.json({ valid: row.status === 'approved', ticket: row });
-});
+}));
 
 app.get(`/${ADMIN_SECRET_PATH}`, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 app.get('/admin.html', (req, res) => res.redirect(`/${ADMIN_SECRET_PATH}`));
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ message: 'Server error. Please try again.' });
+});
 
 app.use((req, res) => {
   res.status(404).send('Page not found');
