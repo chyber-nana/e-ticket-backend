@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const path = require('path');
+const QRCode = require('qrcode');
 const { Pool } = require('pg');
 
 const app = express();
@@ -266,8 +267,10 @@ app.post('/api/login', requireDatabase, asyncRoute(async (req, res) => {
 app.get('/api/my-account', requireDatabase, requireUser, asyncRoute(async (req, res) => {
   const user = await pool.query('SELECT full_name, email, phone, created_at FROM users WHERE id = $1', [req.user.id]);
   const tickets = await pool.query(
-    `SELECT id, program_name, ticket_type, quantity, amount, payment_method, payment_reference,
-            status, ticket_code, admin_note, created_at, approved_at
+    `SELECT id, program_name, ticket_type, quantity, amount,
+       payment_method, payment_reference,
+       status, ticket_code, qr_code, admin_note,
+       created_at, approved_at
      FROM ticket_requests
      WHERE user_id = $1
      ORDER BY created_at DESC`,
@@ -316,12 +319,23 @@ app.post('/api/admin/requests/:id/approve', requireDatabase, requireAdmin, async
   for (let tries = 0; tries < 5; tries += 1) {
     try {
       const code = generateTicketCode();
+      const verifyUrl = `${req.protocol}://${req.get('host')}/verify/${code}`;
+      const qrImage = await QRCode.toDataURL(verifyUrl);
       const result = await pool.query(
-        `UPDATE ticket_requests
-         SET status = 'approved', ticket_code = COALESCE(ticket_code, $1), approved_at = COALESCE(approved_at, NOW()), admin_note = $2
-         WHERE id = $3
-         RETURNING id, status, ticket_code`,
-        [code, req.body.note || null, id]
+      `UPDATE ticket_requests
+ SET status = 'approved',
+     ticket_code = COALESCE(ticket_code, $1),
+     qr_code = COALESCE(qr_code, $2),
+     approved_at = COALESCE(approved_at, NOW()),
+     admin_note = $3
+ WHERE id = $4
+ RETURNING id, status, ticket_code, qr_code`,
+        [
+  code,
+  qrImage,
+  req.body.note || null,
+  id
+]
       );
       if (!result.rowCount) return res.status(404).json({ message: 'Request not found.' });
       return res.json({ message: 'Ticket approved.', request: result.rows[0] });
@@ -368,6 +382,37 @@ app.get(`/${ADMIN_SECRET_PATH}`, (req, res) => {
 });
 
 app.get('/admin.html', (req, res) => res.redirect(`/${ADMIN_SECRET_PATH}`));
+
+app.get('/api/verify/:code', requireDatabase, asyncRoute(async (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+
+  const result = await pool.query(
+    `SELECT ticket_code, status, approved_at
+     FROM ticket_requests
+     WHERE ticket_code = $1`,
+    [code]
+  );
+
+  if (!result.rowCount) {
+    return res.status(404).json({
+      valid: false,
+      message: 'Ticket not found'
+    });
+  }
+
+  const ticket = result.rows[0];
+
+  res.json({
+    valid: ticket.status === 'approved',
+    status: ticket.status,
+    ticketCode: ticket.ticket_code,
+    approvedAt: ticket.approved_at
+  });
+}));
+
+app.get('/verify/:code', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'verify.html'));
+});
 
 app.use((err, req, res, next) => {
   console.error(err);

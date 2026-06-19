@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS ticket_requests (
   payment_reference TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
   ticket_code TEXT UNIQUE,
+  qr_code TEXT,
   admin_note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   approved_at TIMESTAMPTZ
