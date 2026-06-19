@@ -319,7 +319,9 @@ app.post('/api/admin/requests/:id/approve', requireDatabase, requireAdmin, async
   for (let tries = 0; tries < 5; tries += 1) {
     try {
       const code = generateTicketCode();
-      const verifyUrl = `${req.protocol}://${req.get('host')}/verify/${code}`;
+      const verifyUrl = process.env.SITE_URL
+  ? `${process.env.SITE_URL}/verify/${code}`
+  : `${req.protocol}://${req.get('host')}/verify/${code}`;
       const qrImage = await QRCode.toDataURL(verifyUrl);
       const result = await pool.query(
       `UPDATE ticket_requests
