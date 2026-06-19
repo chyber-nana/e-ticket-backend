@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Verify Ticket</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="page-shell">
+    <header class="site-header">
+      <div>
+        <p class="eyebrow">Ticket Verification</p>
+        <h1>Check-in</h1>
+      </div>
+      <a class="text-link" href="/">Back to site</a>
+    </header>
+    <section class="account-panel">
+      <div id="result"><p class="muted">Checking ticket…</p></div>
+    </section>
+  </main>
+  <script>
+    const code = location.pathname.split('/').pop();
+    fetch(`https://e-ticket-backend-2eb3.onrender.com/api/verify/${code}`)
+      .then(res => res.json())
+      .then(data => {
+        const result = document.getElementById('result');
+        if (data.valid) {
+          result.innerHTML = `
+            <span class="status-pill approved">Valid Ticket</span>
+            <div class="ticket-code" style="margin-top:14px">${data.ticketCode}</div>
+            <p class="muted small" style="margin-top:8px">Approved ${new Date(data.approvedAt).toLocaleDateString()}</p>`;
+        } else {
+          result.innerHTML = `
+            <span class="status-pill rejected">Invalid Ticket</span>
+            <p class="muted" style="margin-top:10px">This code is not valid or has not been approved.</p>`;
+        }
+      })
+      .catch(() => {
+        document.getElementById('result').innerHTML =
+          '<p class="form-message error">Could not reach the server.</p>';
+      });
+  </script>
+</body>
+</html>
