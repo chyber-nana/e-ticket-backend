@@ -29,7 +29,7 @@ const pool = DATABASE_URL
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'frontend')));
 
 function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
@@ -380,7 +380,7 @@ app.get('/api/admin/verify/:code', requireDatabase, requireAdmin, asyncRoute(asy
 }));
 
 app.get(`/${ADMIN_SECRET_PATH}`, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+  res.sendFile(path.join(__dirname, 'frontend', 'admin.html'));
 });
 
 app.get('/admin.html', (req, res) => res.redirect(`/${ADMIN_SECRET_PATH}`));
@@ -413,7 +413,7 @@ app.get('/api/verify/:code', requireDatabase, asyncRoute(async (req, res) => {
 }));
 
 app.get('/verify/:code', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'verify.html'));
+  res.sendFile(path.join(__dirname, 'frontend', 'verify.html'));
 });
 
 app.use((err, req, res, next) => {
